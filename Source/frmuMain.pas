@@ -407,7 +407,7 @@ var
 begin
   OnShow := nil;
 
-  // Souurce Version
+  // Source Version
   if cbSrcVersion.Items.Count <> 0 then
     begin
       VersionType.ServerType := fbtClientServer;
@@ -415,10 +415,10 @@ begin
       SetSourceVersion(VersionType);
     end;
 
-  // SourceHostName
+  // Source HostName
   SourceHostName := DEFAULT_HOSTNAME;
 
-  // SourcePort
+  // Source Port
   SourcePort := DEFAULT_GDS_PORT;
 
   // UserName / Password
@@ -444,10 +444,10 @@ begin
       SetDestinationVersion(VersionType);
     end;
 
-  // SourceHostName
+  // Destination HostName
   DestinationHostName := DEFAULT_HOSTNAME;
 
-  // SourcePort
+  // Destination Port
   DestinationPort := DEFAULT_GDS_PORT;
 
   // UserName / Password
