@@ -14,11 +14,11 @@ uses
 type
   TFirebirdMetaData = class(TComponent)
   private
-    { Private �錾 }
+    { Private 宣言 }
     Firebird: TZeosFB;
     function GetTableArray: TStringDynArray;
   public
-    { Public �錾 }
+    { Public 宣言 }
     // Constructor / Destructor
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
