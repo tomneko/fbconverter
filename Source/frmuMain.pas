@@ -1200,7 +1200,8 @@ var
   CanMultiThread: Boolean;
   l, PageSize: Integer;
   ConfigFile, DataList: TStringList;
-  ConfigFileName, CreateDBString, Dmy, s, SQLFileName, FBLibName, FileSpec: string;
+  ConfigFileName, CreateDBString, Dmy, s, OrgCharset,
+  SQLFileName, FBLibName, FileSpec: string;
   F: TextFile;
   FBCharSet: TFBCharset;
   FBVer: TFBVersion;
@@ -1481,6 +1482,24 @@ var
       Firebird.Connect;
   end;
   { ImportTable END }
+
+  { ChangeCharsetToNone BEGIN }
+  procedure ChangeCharsetToNone;
+  begin
+    FBExtract.Firebird.Disconnect;
+    FBExtract.Firebird.ClientCharset := 'NONE';
+    FBExtract.Firebird.Connect;
+  end;
+  { ChangeCharsetToNone END }
+
+  { ChangeCharsetToOrg BEGIN }
+  procedure ChangeCharsetToOrg;
+  begin
+    FBExtract.Firebird.Disconnect;
+    FBExtract.Firebird.ClientCharset := OrgCharset;
+    FBExtract.Firebird.Connect;
+  end;
+  { ChangeCharsetToOrg END }
 begin
   // エラーチェック
   if not CheckError then
@@ -1660,6 +1679,8 @@ begin
       //  SQL 文の作成と実行
       // -----------------------------------------------------------------------
 
+      OrgCharset := FBExtract.Firebird.ClientCharset;
+
       StartTime := Now;
       AddError(MSG_STARTCONVERSION);
       AddError('');
@@ -1750,11 +1771,13 @@ begin
       if Length(StrDynArr) > 0 then
         begin
           AddMessage('User-Defined Functions');
+          ChangeCharsetToNone;
           for s in StrDynArr do
             begin
               ProcessSQL(FBExtract.BuildFunction(s));
               AddMessage('');
             end;
+          ChangeCharsetToOrg;
         end;
 
       //  例外
@@ -1771,10 +1794,12 @@ begin
       StrDynArr := FBExtract.EnumFilters;
       if Length(StrDynArr) > 0 then
         begin
+          ChangeCharsetToNone;
           AddMessage('Blob Filters');
           for s in StrDynArr do
             ProcessSQL(FBExtract.BuildFilter(s));
           AddMessage('');
+          ChangeCharsetToOrg;
         end;
 
       // ロール
@@ -2255,4 +2280,3 @@ begin
 end;
 
 end.
-
