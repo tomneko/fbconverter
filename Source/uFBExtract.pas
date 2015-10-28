@@ -805,7 +805,7 @@ begin
       Argument := '';
       SelectSQL.SELECT := '*';
       SelectSQL.FROM   := 'RDB$FUNCTION_ARGUMENTS';
-      SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME)';
+      SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME) and (RDB$ARGUMENT_POSITION <> 0)';
       SelectSQL.ORDER  := 'RDB$ARGUMENT_POSITION';
       SQL.Text := SelectSQL.Build;
       ParamByName('_FUNCTION_NAME').AsString := aName;
