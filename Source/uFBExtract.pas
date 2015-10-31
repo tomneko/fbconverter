@@ -1,4 +1,4 @@
-﻿{*******************************************************}
+{*******************************************************}
 {                                                       }
 {              Firebird Database Converter              }
 {                                                       }
@@ -15,7 +15,7 @@ interface
 uses
   System.Classes, System.SysUtils, System.Types, System.IOUtils, System.Math,
   System.RegularExpressions, WinAPI.Windows, Data.DB, ZDataset, uZeosFBUtils,
-  uSQLBuilder, Dialogs;
+  uSQLBuilder, Dialogs, ZCompatibility;
 
 type
   { TFieldType }
@@ -294,6 +294,8 @@ const
     (ID: 68; Name: 'CP943C';      BytesPerCharacter: 2; MinimumVersion: fbv21), // Firebird 2.1
     (ID: 69; Name: 'GB18030';     BytesPerCharacter: 4; MinimumVersion: fbv25)  // Firebird 2.5
   );
+
+  KeyString: array [Boolean] of string = ('UNIQUE', 'PRIMARY KEY');
 
 implementation
 
@@ -784,16 +786,16 @@ begin
   Result := Format('DECLARE EXTERNAL FUNCTION %s', [QuotedString(aName)]) + sLineBreak;
   with FB.Query[0] do
     begin
-      SelectSQL.SELECT := '*'; 
-      SelectSQL.FROM   := 'RDB$FUNCTIONS'; 
-      SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME)'; 
+      SelectSQL.SELECT := '*';
+      SelectSQL.FROM   := 'RDB$FUNCTIONS';
+      SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME)';
       SQL.Text := SelectSQL.Build;
       ParamByName('_FUNCTION_NAME').AsString := aName;
       Open;
-      if not IsEmpty then 
+      if not IsEmpty then
         begin
-          MODULE_NAME     := FieldByName('RDB$MODULE_NAME').AsString;
-          ENTRYPOINT      := FieldByName('RDB$ENTRYPOINT').AsString;
+          MODULE_NAME     := Trim(FieldByName('RDB$MODULE_NAME').AsString);
+          ENTRYPOINT      := Trim(FieldByName('RDB$ENTRYPOINT').AsString);
           RETURN_ARGUMENT := FieldByName('RDB$RETURN_ARGUMENT').AsInteger;
         end;
       Close;
@@ -808,7 +810,7 @@ begin
       SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME) and (RDB$ARGUMENT_POSITION <> 0)';
       SelectSQL.ORDER  := 'RDB$ARGUMENT_POSITION';
       SQL.Text := SelectSQL.Build;
-      ParamByName('_FUNCTION_NAME').AsString := aName;
+      ParamByName('_FUNCTION_NAME'    ).AsString  := aName;
       Open;
       while not EOF do
         begin
@@ -824,7 +826,7 @@ begin
         begin
           SelectSQL.WHERE  := '(RDB$FUNCTION_NAME = :_FUNCTION_NAME) AND (RDB$ARGUMENT_POSITION = :_ARGUMENT_POSITION)';
           SQL.Text := SelectSQL.Build;
-          ParamByName('_FUNCTION_NAME').AsString := aName;
+          ParamByName('_FUNCTION_NAME'    ).AsString  := aName;
           ParamByName('_ARGUMENT_POSITION').AsInteger := RETURN_ARGUMENT;
           Open;
           if not IsEmpty then
@@ -1272,6 +1274,8 @@ var
   HasConstraint, HasPrimaryKey, HasUnique, HasCheck, IsDomain: Boolean;
   SelectSQL: TSelectSQL;
   TableConstraintCount: Integer;
+  SL: TStringList;
+  i: Integer;
 begin
   Result := Format('CREATE TABLE %s%s', [QuotedString(aName), sLineBreak]);
   // 外部ファイル
@@ -1364,7 +1368,18 @@ begin
   if HasConstraint then
     begin
       Dec(TableConstraintCount);
-      Result := Result + '  ' + Constraint;
+      SL := TStringList.Create;
+      try
+        SL.Text := Constraint;
+        for i:=0 to SL.Count-1 do
+          begin
+            Result := Result + '  ' + SL[i];
+            if i < SL.Count-1 then
+              Result := Result + sLineBreak;
+          end;
+      finally
+        SL.Free;
+      end;
       if TableConstraintCount > 0 then
         Result := Result + ',';
       Result := Result + sLineBreak;
@@ -1638,8 +1653,6 @@ end;
 
 function TFBExtractor.BuildUniqueKey(TableName: string; IsPrimary: Boolean): string;
 // ユニークキー (表制約) の生成
-const
-  KeyString: array [Boolean] of string = ('UNIQUE', 'PRIMARY KEY');
 var
   Cnt, RecCnt: Integer;
   IsUnique: Boolean;
@@ -1701,15 +1714,18 @@ end;
 function TFBExtractor.BuildConstraint(TableName: string): string;
 // Constraint (表制約) の生成
 var
-  ConstraintName, FieldNames, KeyFields: string;
-  i: Integer;
-  SelectSQL: TSelectSQL;
   SL: TStringList;
-begin
-  KeyFields := '';
-  SL := TStringList.Create;
-  try
+  PrimaryKeyFields, UniqueKeyFields: string;
+  { _BuildConstraint BEGIN }
+  function _BuildConstraint(TableName: string; IsPrimary: Boolean): string;
+  var
+    ConstraintName, FieldNames, KeyFields: string;
+    i: Integer;
+    SelectSQL: TSelectSQL;
+  begin
     // Constraint 名を取得
+    KeyFields := '';
+    SL.Clear;
     with FB.Query[1] do
       begin
         SelectSQL.SELECT := 'A.RDB$CONSTRAINT_NAME';
@@ -1719,7 +1735,7 @@ begin
         SelectSQL.ORDER  := '';
         SQL.Text := SelectSQL.Build;
         ParamByName('_RELATION_NAME').AsString := TableName;
-        ParamByName('_CONSTRAINT_TYPE').AsString := 'UNIQUE';
+        ParamByName('_CONSTRAINT_TYPE').AsString := KeyString[IsPrimary];
         Open;
         while not EOF do
           begin
@@ -1746,7 +1762,7 @@ begin
           begin
             ParamByName('_CONSTRAINT_NAME').AsString := SL[i];
             ParamByName('_RELATION_NAME').AsString := TableName;
-            ParamByName('_CONSTRAINT_TYPE').AsString := 'UNIQUE';
+            ParamByName('_CONSTRAINT_TYPE').AsString := KeyString[IsPrimary];
             Open;
             while not EOF do
               begin
@@ -1759,28 +1775,43 @@ begin
             Close;
           end;
         if FieldNames <> '' then
-          KeyFields := KeyFields + Format('CONSTRAINT %s UNIQUE (%s)', [ConstraintName, FieldNames]);
+          KeyFields := KeyFields + Format('CONSTRAINT %s %s (%s)', [ConstraintName, KeyString[IsPrimary], FieldNames]);
         if i < (SL.Count-1) then
           KeyFields := KeyFields + ',' + sLineBreak;
       end;
+    result := KeyFields;
+  end;
+  { _BuildConstraint END }
+begin
+  PrimaryKeyFields := '';
+  UniqueKeyFields  := '';
+  SL := TStringList.Create;
+  try
+    // CONSTRAINT PRIMARY
+    PrimaryKeyFields := _BuildConstraint(TableName, True);
+    // CONSTRAINT UNIQUE
+    UniqueKeyFields  := _BuildConstraint(TableName, False);
   finally
     SL.Free;
   end;
-  Result := KeyFields;
+  Result := PrimaryKeyFields;
+  if (PrimaryKeyFields <> '') and (UniqueKeyFields <> '') then
+    Result := Result + ',' + sLineBreak;
+  Result := Result + UniqueKeyFields;
 end;
 
 function TFBExtractor.BuildForeignKey(TableName: string): string;
 // 外部キー (表制約) の生成 : ALTER TABLE で表現
 var
-  DeleteRule, ForeignKeys, RefIdx, RefTable, RefKeys, UpdateRule: string;
+  DeleteRule, ForeignKeys, RefIdx, RefTable, RefKeys, UpdateRule, Constraint: string;
   SelectSQL: TSelectSQL;
 begin
   Result := '';
 
-  SelectSQL.SELECT := 'Max(C.RDB$CONST_NAME_UQ)';
-  SelectSQL.FROM   := 'RDB$RELATION_CONSTRAINTS A ' + 
+  SelectSQL.SELECT := 'Max(C.RDB$CONST_NAME_UQ), Max(C.RDB$CONSTRAINT_NAME)';
+  SelectSQL.FROM   := 'RDB$RELATION_CONSTRAINTS A ' +
                       'LEFT JOIN RDB$INDEX_SEGMENTS B ON ' + 
-                      '(B.RDB$INDEX_NAME = A.RDB$INDEX_NAME) ' + 
+                      '(B.RDB$INDEX_NAME = A.RDB$INDEX_NAME) ' +
                       'LEFT JOIN RDB$REF_CONSTRAINTS C ON ' + 
                       '(C.RDB$CONSTRAINT_NAME = A.RDB$CONSTRAINT_NAME)';
   SelectSQL.WHERE  := '(A.RDB$RELATION_NAME = :_RELATION_NAME) AND (A.RDB$CONSTRAINT_TYPE = :_CONSTRAINT_TYPE)';
@@ -1788,10 +1819,10 @@ begin
   FB.Query[0].SQL.Text := SelectSQL.Build;
 
   SelectSQL.SELECT := 'A.RDB$CONSTRAINT_TYPE, A.RDB$RELATION_NAME, B.RDB$FIELD_NAME, C.RDB$CONST_NAME_UQ, C.RDB$UPDATE_RULE, C.RDB$DELETE_RULE';
-  SelectSQL.FROM   := 'RDB$RELATION_CONSTRAINTS A ' + 
+  SelectSQL.FROM   := 'RDB$RELATION_CONSTRAINTS A ' +
                       'LEFT JOIN RDB$INDEX_SEGMENTS B ON ' + 
                       '(B.RDB$INDEX_NAME = A.RDB$INDEX_NAME) ' + 
-                      'LEFT JOIN RDB$REF_CONSTRAINTS C ON ' + 
+                      'LEFT JOIN RDB$REF_CONSTRAINTS C ON ' +
                       '(C.RDB$CONSTRAINT_NAME = A.RDB$CONSTRAINT_NAME)';
   SelectSQL.WHERE  := '(A.RDB$RELATION_NAME = :_RELATION_NAME) AND (A.RDB$CONSTRAINT_TYPE = :_CONSTRAINT_TYPE) AND (C.RDB$CONST_NAME_UQ = :_CONST_NAME_UQ)';
   SelectSQL.GROUP  := '';
@@ -1817,6 +1848,11 @@ begin
           ForeignKeys := '';
           RefKeys     := '';
           RefIdx      := FB.Query[0].Fields[0].AsString;
+          Constraint  := Trim(FB.Query[0].Fields[1].AsString);
+          if Pos('INTEG_', Constraint) = 1 then
+            Constraint := ''
+          else
+            Constraint := 'CONSTRAINT ' + QuotedString(Constraint) + ' ';
           // 外部キーの列挙
           with FB.Query[1] do
             begin
@@ -1851,8 +1887,8 @@ begin
                 end;
               Close;
             end;
-          Result := Result + Format('ALTER TABLE %s ADD FOREIGN KEY (%s) REFERENCES %s (%s)',
-            [QuotedString(TableName), ForeignKeys, QuotedString(RefTable), RefKeys]);
+          Result := Result + Format('ALTER TABLE %s ADD %sFOREIGN KEY (%s) REFERENCES %s (%s)',
+            [QuotedString(TableName), Constraint, ForeignKeys, QuotedString(RefTable), RefKeys]);
           if (DeleteRule <> '') and (DeleteRule <> 'RESTRICT') then
             Result := Result + Format(' ON DELETE %s', [DeleteRule]);
           if (UpdateRule <> '') and  (UpdateRule <> 'RESTRICT') then
