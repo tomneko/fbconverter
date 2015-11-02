@@ -297,6 +297,13 @@ const
 
   KeyString: array [Boolean] of string = ('UNIQUE', 'PRIMARY KEY');
 
+  rel_persistent = 0;
+  rel_view = 1;
+  rel_external = 2;
+  rel_virtual = 3;
+  rel_global_temp_preserve = 4;
+  rel_global_temp_delete = 5;
+
 implementation
 
 function QuotedString(s: string): string;
@@ -1270,25 +1277,30 @@ function TFBExtractor.BuildTable(aName: string): string;
 // テーブルの生成
 var
   EXTERNAL_FILE, FIELD_NAME, FIELD_TYPE,
-  Check, Constraint, FieldStr, PrimaryKey, Unique: string;
+  Check, Constraint, FieldStr, PrimaryKey, Unique, Dmy: string;
   HasConstraint, HasPrimaryKey, HasUnique, HasCheck, IsDomain: Boolean;
   SelectSQL: TSelectSQL;
   TableConstraintCount: Integer;
   SL: TStringList;
   i: Integer;
+  RelationType: Integer;
 begin
-  Result := Format('CREATE TABLE %s%s', [QuotedString(aName), sLineBreak]);
+  Result := '';
+  RelationType := -1;
   // 外部ファイル
   with FB.Query[0] do
     begin
-      SelectSQL.SELECT := '*'; 
-      SelectSQL.FROM   := 'RDB$RELATIONS'; 
+      SelectSQL.SELECT := '*';
+      SelectSQL.FROM   := 'RDB$RELATIONS';
       SelectSQL.WHERE  := '(RDB$RELATION_NAME = :_RELATION_NAME)';
       SQL.Text := SelectSQL.Build;
       ParamByName('_RELATION_NAME').AsString := aName;
       Open;
       if not IsEmpty then
         begin
+          if Fields.FindField('RDB$RELATION_TYPE') <> nil then
+            if not FieldByName('RDB$RELATION_TYPE').IsNull then
+              RelationType := FieldByName('RDB$RELATION_TYPE').AsInteger;
           if not FieldByName('RDB$EXTERNAL_FILE').IsNULL then
             begin
               EXTERNAL_FILE := FieldByName('RDB$EXTERNAL_FILE').AsString;
@@ -1297,6 +1309,14 @@ begin
         end;
       Close;
     end;
+  case RelationType of
+    rel_global_temp_preserve,
+    rel_global_temp_delete:
+      Dmy := 'GLOBAL TEMPORARY' + #$0020;
+  else
+    Dmy := '';
+  end;
+  Result := Format('CREATE %sTABLE %s%s', [Dmy, QuotedString(aName), sLineBreak]);
   Result := Result + '(' + sLineBreak;
   // プライマリキー (表制約)
   PrimaryKey := BuildPrimaryKey(aName);
@@ -1393,7 +1413,17 @@ begin
         Result := Result + ',';
       Result := Result + sLineBreak;
     end;
-  Result := Result + ')' + TERM_CHAR;
+
+  case RelationType of
+    rel_global_temp_preserve:
+      Dmy := #$0020 + 'ON COMMIT PRESERVE ROWS';
+    rel_global_temp_delete:
+      Dmy := #$0020 + 'ON COMMIT DELETE ROWS';
+  else
+    Dmy := '';
+  end;
+
+  Result := Result + ')' + Dmy + TERM_CHAR;
 end;
 
 class function TFBExtractor.PreBuildTableData(aExtractor: TFBExtractor; TableName: string; SplitSize: Integer): TSplitDataRec;
