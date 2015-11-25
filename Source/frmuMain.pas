@@ -2208,7 +2208,10 @@ begin
             for i:=0 to SrcQuery.FieldCount-1 do
               begin
                 if SrcQuery.Fields[i].IsNull then
-                  Continue;
+                  begin
+                    DstQuery.Params[i].Clear;
+                    Continue;
+                  end;    
                 case SrcQuery.Fields[i].DataType of
                   ftBoolean:
                     DstQuery.Params[i].AsBoolean    := SrcQuery.Fields[i].AsBoolean;
