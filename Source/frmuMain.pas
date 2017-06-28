@@ -2242,7 +2242,9 @@ begin
                       // サイズ 0 の BLOB データ (NULL ではない) は登録できない
                       // http://qc.embarcadero.com/wc/qcmain.aspx?d=88212
                       if Stream.Size > 0  then
-                        DstQuery.Params[i].LoadFromStream(Stream, ftBlob);
+                        DstQuery.Params[i].LoadFromStream(Stream, ftBlob)
+                      else
+                        DstQuery.Params[i].AsString := '';
                     end
                 else
                   raise Exception.Create(MSG_UNKNOWN_DATATYPE);
