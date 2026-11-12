@@ -4,7 +4,7 @@ fbconverter は、Firebird のデータベースを別バージョンへ移行�
 
 ## ダウンロード
 
-[GitHub Releases の v2.0.0](https://github.com/tomneko/fbconverter/releases/tag/v2.0.0) から WIN32 または WIN64 の ZIP を取得します。ZIP をフォルダ構成ごと展開し、`fbconverter.exe` を実行してください。
+[GitHub Releases の最新版](https://github.com/tomneko/fbconverter/releases/latest) から WIN32 または WIN64 の ZIP を取得します。ZIP をフォルダ構成ごと展開し、`fbconverter.exe` を実行してください。
 
 | 配布版 | 同梱の Embedded 変換先 |
 | --- | --- |

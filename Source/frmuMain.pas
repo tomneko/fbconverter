@@ -1352,7 +1352,9 @@ const
   ROOT_DIRECTORY         = 'RootDirectory';
   REPLACE_DUMMY_STRING   = '@@DIR@@';
 var
-  CanMultiThread: Boolean;
+  CanMultiThread, HasConversionErrors: Boolean;
+  CompletionMessage: string;
+  CompletionDialogType: TMsgDlgType;
   l, PageSize: Integer;
   ConfigFile, DataList: TStringList;
   ConfigFileName, CreateDBString, Dmy, s, OrgCharset,
@@ -1375,6 +1377,7 @@ var
     Err: TStringList;
     i: Integer;
   begin
+    HasConversionErrors := True;
     Err := TStringList.Create;
     try
       Err.Text := aText;
@@ -1666,6 +1669,7 @@ begin
   if not CheckError then
     Exit;
 
+  HasConversionErrors := False;
   FIsConvertRunning := True;
   try
     // コピー先データベースが存在すれば削除
@@ -2114,10 +2118,6 @@ begin
           AddMessage('');
         end;
 
-      AddError(MSG_ENDCONVERSION);
-      Dmy := FormatDateTime('(HH:NN:SS)', Now - StartTime);
-      AddError(Dmy);
-
       // -----------------------------------------------------------------------
 
       // DB の切断
@@ -2127,6 +2127,20 @@ begin
           Firebird.Commit;
           Firebird.DisConnect;
         end;
+
+      if HasConversionErrors then
+        begin
+          CompletionMessage := MSG_ENDCONVERSION_WITH_ERRORS;
+          CompletionDialogType := TMsgDlgType.mtWarning;
+        end
+      else
+        begin
+          CompletionMessage := MSG_ENDCONVERSION;
+          CompletionDialogType := TMsgDlgType.mtInformation;
+        end;
+      AddError(CompletionMessage);
+      Dmy := FormatDateTime('(HH:NN:SS)', Now - StartTime);
+      AddError(Dmy);
 
       // ログの保存
       if (not IsEmptyDatabase) and (VerboseMode or MetadataOnly) then
@@ -2143,7 +2157,7 @@ begin
     if CommandLineMode then
       Exit;
     if not frmLogViewer.Showing then
-      ConversionDialog(INF_MSG_DONE + sLineBreak + Dmy, TMsgDlgType.mtInformation, [TMsgDlgBtn.mbOK], -1)
+      ConversionDialog(CompletionMessage + sLineBreak + Dmy, CompletionDialogType, [TMsgDlgBtn.mbOK], -1)
     // ログビューアが最小化/最大化されていたら元に戻す
     else if frmLogViewer.WindowState <>  wsMinimized then
       frmLogViewer.WindowState := wsNormal;

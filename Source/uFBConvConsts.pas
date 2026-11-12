@@ -22,9 +22,6 @@ const
   ERR_MSG_CANTCREATEDATABASE = 'Can''t Create Database';
   ERR_MSG_REMOTEPATHSPECIFIED = 'Can not specified remote path.';
 
-  // for Information Dialog
-  INF_MSG_DONE = 'Done.';
-
   // for Confirmation Dialog
   CON_MSG_FILEEXIST = 'Destination database file already exist.' + #$0D#$0A + 'Overwrite?';
   CON_MSG_VERSIONMISMATCH = '%s Client/Server version mismatch.' + #$0D#$0A + // Source / Destination
@@ -38,6 +35,7 @@ const
   DESTINATON_STR = 'Destination';
   MSG_STARTCONVERSION = 'Start conversion.';
   MSG_ENDCONVERSION = 'Done.';
+  MSG_ENDCONVERSION_WITH_ERRORS = 'Conversion completed with errors. See the error log.';
   MSG_PROCESSED_RECORD = '  %s records processed. %s';                          // Records / Process time
   MSG_PROCESSED_RECORD_BLOCK = '%s-%s record block processed. %s';              // Start record / End record / Process time
   MSG_UNKNOWN_DATATYPE = 'Unknown data type.';
