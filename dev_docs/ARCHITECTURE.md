@@ -277,3 +277,9 @@ Delphi 13.1 の MSBuild で Win32／Win64 Release をビルドし、公式 3.0.1
 `Release/fbconverter-2.0.0_WIN32.zip` と `Release/fbconverter-2.0.0_WIN64.zip` は、Delphi 13.1 でビルドした製品バージョン 2.0.0（ファイルバージョン 2.0.0.0）を収録する。両版に Firebird 2.1.7 Embedded と同じアーキテクチャの CORE-2095 修正版 `intl/fbintl.dll`、3.0.14・4.0.7・5.0.4 Embedded、stdio 用 `fbconverter_mcp.py` を同梱した。従来の Embedded は Win32 の 1.5・2.0 と両版の 2.5 を収録する。MCP は展開先で同じフォルダの `fbconverter.exe` を参照する。対応ソース、ライセンス、ビルド手順は両版の `Sources/source-2.0.0.tar.gz` にある。
 
 両 ZIP を個別に展開し、実行ファイルと DLL のアーキテクチャおよび 2.1.7 の修正版 DLL のハッシュを確認した。展開先の CLI で 2.1 EUC 関連12件、3.0 → 4.0・5.0 と 4.0 → 5.0 の追加型付き移行6件が一致した。同梱の MCP からも両版で 1.0.3 → 5.0 を実行し、既存の出力先への再実行が終了コード 2 になり、ファイルのハッシュが変わらないことを確認した。
+
+## 2.0.1 の配布 ZIP と終了表示の検証
+
+`Release/fbconverter-2.0.1_WIN32.zip` と `Release/fbconverter-2.0.1_WIN64.zip` は、Delphi 13.1 でビルドした製品バージョン 2.0.1（ファイルバージョン 2.0.1.0）を収録する。2.0.0 の配布 ZIP をベースに、実行ファイルと対応ソースのアーカイブ `Sources/source-2.0.1.tar.gz` を更新した。両 ZIP を展開して `fbconverter.exe --help` の起動を確認し、公開した ZIP の SHA-256 が手元の ZIP と一致することを確認した。 [v2.0.1 リリース](https://github.com/tomneko/fbconverter/releases/tag/v2.0.1)
+
+GUI で変換中に SQL エラーが記録された場合は、終了時に `Conversion completed with errors. See the error log.` を表示する。公開版で Firebird 3.0 → 1.5 の変換を再試行し、`VARCHAR(255)` 3列の複合 UNIQUE インデックス `IDX01_INIDATA` の作成がキー長制限で失敗したあと、GUI のログ末尾にこのメッセージが出ることを確認した。
