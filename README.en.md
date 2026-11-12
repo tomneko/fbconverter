@@ -1,6 +1,6 @@
 ![fbconverter — Firebird Database Converter](assets/fbconverter-banner.png)
 
-[日本語](README.md)
+English | [Japanese](README.md)
 
 # fbconverter
 
