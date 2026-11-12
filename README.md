@@ -1,5 +1,7 @@
 ![fbconverter — Firebird Database Converter](assets/fbconverter-banner.png)
 
+[English](README.en.md)
+
 # fbconverter
 
 fbconverter は、Firebird のデータベースを別バージョンへ移行する Windows ツールです。変換元からスキーマとデータを読み取り、指定したバージョンのデータベースを新規作成します。GUI、CLI、ローカルの stdio MCP から利用できます。
