@@ -1,0 +1,22 @@
+diff --git a/src/intl/cv_jis.cpp b/src/intl/cv_jis.cpp
+index f1e3585..df3ad71 100644
+--- a/src/intl/cv_jis.cpp
++++ b/src/intl/cv_jis.cpp
+@@ -50,7 +50,7 @@ ULONG CVJIS_eucj_to_unicode(csconvert* obj,
+ 
+ /* See if we're only after a length estimate */
+ 	if (p_dest_ptr == NULL)
+-		return (src_len);
++		return sizeof(USHORT) * src_len;
+ 
+ 	Firebird::OutAligner<USHORT> d(p_dest_ptr, dest_len);
+ 	USHORT* dest_ptr = d;
+@@ -71,7 +71,7 @@ ULONG CVJIS_eucj_to_unicode(csconvert* obj,
+ 			/* Step 2: Convert from ASCII to UNICODE */
+ 			ch = ch1;
+ 		}
+-		else if (!src_len || !(*src_ptr & 0x80)) {
++		else if (src_len == 1 || !(*src_ptr & 0x80)) {
+ 			/* We received a multi-byte indicator, but either
+ 			   there isn't a 2nd byte or the 2nd byte isn't marked */
+ 			*err_code = CS_BAD_INPUT;

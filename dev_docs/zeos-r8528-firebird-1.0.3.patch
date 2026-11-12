@@ -1,0 +1,70 @@
+diff --git a/src/dbc/ZDbcInterbaseFirebirdMetadata.pas b/src/dbc/ZDbcInterbaseFirebirdMetadata.pas
+index c0fe3d6..2eb5a10 100644
+--- a/src/dbc/ZDbcInterbaseFirebirdMetadata.pas
++++ b/src/dbc/ZDbcInterbaseFirebirdMetadata.pas
+@@ -498,7 +498,11 @@ begin
+       tmp := Copy(FProductVersion, I+1, ZFastCode.Pos(' ', FProductVersion)-I-1)
+     else
+       tmp := Copy(FProductVersion, I+1, MaxInt);
+-    FHostVersion := FHostVersion + StrToInt(tmp)*1000;
++    // Firebird 1.0.3 also includes the release number in the product name.
++    I := ZFastCode.Pos('.', tmp);
++    if I > 0 then
++      SetLength(tmp, I-1);
++    FHostVersion := FHostVersion + StrToIntDef(tmp, 0)*1000;
+     if FIsFireBird and (Copy(FServerVersion, FirstStringIndex, 8) = 'WI-V6.3.') then begin
+       tmp := FServerVersion;
+       Delete(tmp, FbPos - 1, length(tmp));
+@@ -1884,9 +1888,11 @@ const
+   COMPUTED_SOURCE_Index       = FirstDbcIndex + 15;
+   CHARACTER_SET_ID_Index      = FirstDbcIndex + 16;
+   IDENTITY_TYPE_Index         = FirstDbcIndex + 17;
++  DOMAIN_NULL_FLAG_Index      = FirstDbcIndex + 18;
+ var
+   SQL, ColumnName, ColumnDomain: string;
+-  BLRSubType, SubTypeName, FieldScale, FieldLength, Precision: Integer;
++  BLRSubType, SubTypeName, FieldScale, FieldLength, Precision, NullFlag: Integer;
++  NullFlagMissing: Boolean;
+   LTableNamePattern, LColumnNamePattern: string;
+   SQLType: TZSQLType;
+   GUIDProps: TZInterbaseFirebirdConnectionGUIDProps;
+@@ -1903,7 +1909,7 @@ begin
+     'RF.RDB$FIELD_NAME');
+   Connection := GetConnection;
+   SQL := ' SELECT RF.RDB$RELATION_NAME, RF.RDB$FIELD_NAME, RF.RDB$FIELD_POSITION,'
+-    + ' COALESCE(RF.RDB$NULL_FLAG, F.RDB$NULL_FLAG) AS RDB$NULL_FLAG,'
++    + ' RF.RDB$NULL_FLAG,'
+     + ' RF.RDB$FIELD_SOURCE, F.RDB$FIELD_LENGTH,'
+     + ' F.RDB$FIELD_SCALE, T.RDB$TYPE_NAME, F.RDB$FIELD_TYPE,'
+     + ' F.RDB$FIELD_SUB_TYPE, RF.RDB$DESCRIPTION, F.RDB$CHARACTER_LENGTH,'
+@@ -1915,6 +1921,7 @@ begin
+   else
+     SQL := SQL + 'RDB$IDENTITY_TYPE';
+   SQL := SQL
++    + ', F.RDB$NULL_FLAG'
+     + ' FROM RDB$RELATION_FIELDS RF'
+     + ' JOIN RDB$FIELDS F ON (F.RDB$FIELD_NAME = RF.RDB$FIELD_SOURCE)'
+     + ' LEFT JOIN RDB$TYPES T ON (F.RDB$FIELD_TYPE = T.RDB$TYPE'
+@@ -1988,7 +1995,12 @@ Str_Size:   Result.UpdateInt(TableColColumnCharOctetLengthIndex, FieldLength);
+       end;
+       Result.UpdateInt(TableColColumnNumPrecRadixIndex, 10);   //NUM_PREC_RADIX
+ 
+-      if GetInt(NULL_FLAG_Index) <> 0
++      // Firebird 1.0 has no COALESCE. Use the domain flag when the column flag is NULL.
++      NullFlag := GetInt(NULL_FLAG_Index);
++      if WasNull then
++        NullFlag := GetInt(DOMAIN_NULL_FLAG_Index);
++      NullFlagMissing := WasNull;
++      if NullFlag <> 0
+       then Result.UpdateInt(TableColColumnNullableIndex, Ord(ntNoNulls))   //NULLABLE
+       else Result.UpdateInt(TableColColumnNullableIndex, Ord(ntNullable));
+       P := GetPAnsiChar(DESCRIPTION_Index, L);
+@@ -2027,7 +2039,7 @@ Str_Size:   Result.UpdateInt(TableColColumnCharOctetLengthIndex, FieldLength);
+       //Result.UpdateNull(TableColColumnSQLDateTimeSubIndex);   //SQL_DATETIME_SUB
+       Result.UpdateInt(TableColColumnCharOctetLengthIndex, GetInt(FIELD_SCALE_Index));   //CHAR_OCTET_LENGTH
+       Result.UpdateInt(TableColColumnOrdPosIndex, GetInt(FIELD_POSITION_Index)+ 1);   //ORDINAL_POSITION
+-      Result.UpdateString(TableColColumnIsNullableIndex, YesNoStrs[IsNull(NULL_FLAG_Index)]);   //IS_NULLABLE
++      Result.UpdateString(TableColColumnIsNullableIndex, YesNoStrs[NullFlagMissing]);   //IS_NULLABLE
+       if not IsNull(IDENTITY_TYPE_Index) then
+         Result.UpdateBoolean(TableColColumnAutoIncIndex, True); //AUTO_INCREMENT
+       Result.UpdateBoolean(TableColColumnCaseSensitiveIndex, IC.IsCaseSensitive(ColumnName)); //CASE_SENSITIVE

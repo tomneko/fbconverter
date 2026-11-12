@@ -17,8 +17,8 @@ uses
   System.IOUtils, System.UITypes, System.Math, System.StrUtils, System.RegularExpressions,
   System.IniFiles, Vcl.Dialogs, Vcl.ActnList, Vcl.ExtCtrls, Vcl.StdCtrls, Vcl.Buttons,
   System.Generics.Collections, Vcl.Forms, Vcl.Graphics, Vcl.Controls,
-  Winapi.Windows, Winapi.Messages, Winapi.ShellAPI, Data.DB, ZClasses, ZConnection,
-  ZDbcIntfs, ZSysUtils, ZDataset, uZeosFBUtils, uFBExtract, uFBConvConsts, uIoUtilsEx,
+  Winapi.Windows, Winapi.Messages, Winapi.ShellAPI, Data.DB, ZConnection,
+  ZDbcIntfs, ZExceptions, ZSysUtils, ZDataset, uZeosFBUtils, uFBExtract, uFBConvConsts, uIoUtilsEx,
   uSQLBuilder, AsyncCalls, ZAbstractConnection, ZCompatibility;
 
 type
@@ -157,7 +157,7 @@ type
     function GetDestinationServerType: TFBServerType;
     function GetDestinationVersion: TFBVersion;
     function GetEmbeddedDllName: string;
-    function GetEmbeddedVersion: TFBVersion;
+    function EmbeddedLibraryPath(Version: TFBVersion): string;
     function GetSourceHostName: string;
     function GetIsEmptyDatabase: Boolean;
     function GetMetadataOnly: Boolean;
@@ -218,6 +218,7 @@ type
   public
     { Public 宣言 }
     FBExtract: TFBExtractor;
+    procedure RunCommandLine;
     // Properties
     property BlobDir: string read FBlobDir;
     property ClientDir: string read FClientDir;
@@ -278,8 +279,10 @@ const
   INI_SECTION_GLOBALS = 'Globals';
 
   procedure ImportData(aBulkRec: PFBBulkRec);
+  procedure WriteCommandLine(const Msg: string; ErrorOutput: Boolean = False);
 
 var
+  CommandLineMode: Boolean;
   frmMain: TfrmMain;
 
 implementation
@@ -288,6 +291,152 @@ implementation
 
 uses
   frmuLogViewer;
+
+procedure WriteCommandLine(const Msg: string; ErrorOutput: Boolean);
+var
+  OutputHandle: THandle;
+  Device, Written, ConsoleMode: DWORD;
+  Line: string;
+  Bytes: TBytes;
+begin
+  if ErrorOutput then
+    Device := STD_ERROR_HANDLE
+  else
+    Device := STD_OUTPUT_HANDLE;
+  OutputHandle := GetStdHandle(Device);
+  if (OutputHandle = 0) or (OutputHandle = INVALID_HANDLE_VALUE) then
+    begin
+      AttachConsole(ATTACH_PARENT_PROCESS);
+      OutputHandle := GetStdHandle(Device);
+    end;
+  if (OutputHandle = 0) or (OutputHandle = INVALID_HANDLE_VALUE) then
+    Exit;
+  Line := Msg + sLineBreak;
+  if GetConsoleMode(OutputHandle, ConsoleMode) then
+    WriteConsole(OutputHandle, PChar(Line), Length(Line), Written, nil)
+  else
+    begin
+      Bytes := TEncoding.UTF8.GetBytes(Line);
+      WriteFile(OutputHandle, Bytes[0], Length(Bytes), Written, nil);
+    end;
+end;
+
+procedure TfrmMain.RunCommandLine;
+var
+  I, Port: Integer;
+  Option, SourceFile, DestinationFile, SourceCharsetOption, DestinationCharsetOption: string;
+  SourceVersionOption, DestinationVersionOption, WorkBase, RunDir: string;
+  RunId: TGUID;
+  VersionType: TFBVersionType;
+
+  function ReadValue: string;
+  begin
+    Inc(I);
+    Result := ParamStr(I);
+    if (I > ParamCount) or (Result = '') or StartsStr('--', Result) then
+      raise EArgumentException.CreateFmt('%s requires a value.', [Option]);
+  end;
+
+  function ParseVersion(const Value: string): TFBVersion;
+  var
+    Version: TFBVersion;
+  begin
+    for Version := Succ(fbvUnknown) to High(TFBVersion) do
+      if TZeosFB.VersionToString(Version) = Value then
+        Exit(Version);
+    raise EArgumentException.CreateFmt('Invalid Firebird version: %s', [Value]);
+  end;
+
+begin
+  FormShow(nil);
+  WorkBase := TPath.GetTempPath;
+  I := 2;
+  while I <= ParamCount do
+    begin
+      Option := ParamStr(I);
+      if Option = '--source' then
+        SourceFile := ReadValue
+      else if Option = '--destination' then
+        DestinationFile := ReadValue
+      else if Option = '--source-version' then
+        SourceVersionOption := ReadValue
+      else if Option = '--destination-version' then
+        DestinationVersionOption := ReadValue
+      else if Option = '--source-host' then
+        SourceHostName := ReadValue
+      else if Option = '--source-local' then
+        SourceHostName := ''
+      else if Option = '--source-port' then
+        begin
+          if not TryStrToInt(ReadValue, Port) or (Port < 1) or (Port > High(UInt16)) then
+            raise EArgumentException.Create('Invalid source port.');
+          SourcePort := Port;
+        end
+      else if Option = '--source-user' then
+        SourceUserName := ReadValue
+      else if Option = '--source-charset' then
+        SourceCharsetOption := UpperCase(ReadValue)
+      else if Option = '--destination-charset' then
+        DestinationCharsetOption := UpperCase(ReadValue)
+      else if Option = '--work-dir' then
+        WorkBase := ReadValue
+      else if Option = '--single-thread' then
+        FUseMultiThread := False
+      else
+        raise EArgumentException.CreateFmt('Unknown option: %s', [Option]);
+      Inc(I);
+    end;
+
+  if (SourceFile = '') or (DestinationFile = '') or
+     (SourceVersionOption = '') or (DestinationVersionOption = '') then
+    raise EArgumentException.Create('Specify --source, --destination, --source-version and --destination-version.');
+
+  if SourceHostName = '' then
+    SourceFile := TPath.GetFullPath(SourceFile);
+  SourceDataBaseName := SourceFile;
+  DestinationDataBaseName := TPath.GetFullPath(DestinationFile);
+  if TFile.Exists(DestinationDataBaseName) then
+    raise EArgumentException.CreateFmt('Destination already exists: %s', [DestinationDataBaseName]);
+  if GetEnvironmentVariable('FBCONVERTER_SOURCE_PASSWORD') <> '' then
+    SourcePassword := GetEnvironmentVariable('FBCONVERTER_SOURCE_PASSWORD');
+
+  VersionType.ServerType := fbtClientServer;
+  VersionType.Version := ParseVersion(SourceVersionOption);
+  SetSourceVersion(VersionType);
+  if cbSrcVersion.ItemIndex < 0 then
+    raise EArgumentException.CreateFmt('Source client DLL is missing: %s', [SourceVersionOption]);
+  VersionType.ServerType := fbtEmbedded;
+  VersionType.Version := ParseVersion(DestinationVersionOption);
+  SetDestinationVersion(VersionType);
+  if cbDstVersion.ItemIndex < 0 then
+    raise EArgumentException.CreateFmt('Destination Embedded runtime is missing: %s', [DestinationVersionOption]);
+  cbDstVersionChange(nil);
+
+  if SourceCharsetOption <> '' then
+    begin
+      if cbSrcCharset.Items.IndexOf(SourceCharsetOption) < 0 then
+        raise EArgumentException.CreateFmt('Invalid source character set: %s', [SourceCharsetOption]);
+      SourceCharset := SourceCharsetOption;
+    end;
+  if DestinationCharsetOption <> '' then
+    begin
+      if cbDstCharset.Items.IndexOf(DestinationCharsetOption) < 0 then
+        raise EArgumentException.CreateFmt('Invalid destination character set: %s', [DestinationCharsetOption]);
+      DestinationCharset := DestinationCharsetOption;
+    end;
+
+  if CreateGUID(RunId) <> 0 then
+    raise Exception.Create('Could not create a conversion work directory name.');
+  RunDir := TPath.Combine(TPath.GetFullPath(WorkBase), 'fbconverter-' + GUIDToString(RunId));
+  SetWorkDir(RunDir);
+  WriteCommandLine('Logs: ' + WorkDir);
+  try
+    ProcessConvert;
+  finally
+    FBExtract.Firebird.Disconnect;
+  end;
+  WriteCommandLine('Done: ' + DestinationDataBaseName);
+end;
 
 procedure TfrmMain.FormCreate(Sender: TObject);
 // フォーム作成時
@@ -309,17 +458,6 @@ var
   Ini: TMemIniFile;
   IniFileName, dDefaultCharset, dWorkDir: string;
 begin
-  // ---------------------------------------------------------------------------
-  // 2014/12/30 時点:
-  // ・ZeosLib 7.1.4 stable は Firebird 1.5 以前で問題が発生する
-  // ・ZeosLib 7.1.3a stable は Firebird 1.5 以前で問題が発生する
-  // ・ZeosLib 7.1.3 stable は Firebird 1.5 以前で問題が発生する
-  // ---------------------------------------------------------------------------
-  {$IF ZEOS_VERSION <> '7.1.2-stable'}
-    {$MESSAGE ERROR 'Firebird Database Converter is may not work correctly.'}
-  {$IFEND}
-  // ---------------------------------------------------------------------------
-
   ClientWidth  := 622;
   ClientHeight := 612;
 
@@ -336,7 +474,7 @@ begin
   FEmbeddedDir := TPath.Combine(TPath.GetDirectoryName(ParamStr(0)), EMBEDDED_DIR);
   FEmbeddedVersions := [];
   for FBVer := Low(TFBVersion) to High(TFBVersion) do
-    if TFile.Exists(TPath.Combine(EmbeddedDir, TZeosFB.VersionToString(FBVer)) + PathDelim + EMBEDDED_LIBNAME) then
+    if EmbeddedLibraryPath(FBVer) <> '' then
       begin
         Include(FEmbeddedVersions, FBVer);
         FBVerType.ServerType := fbtEmbedded;
@@ -349,7 +487,7 @@ begin
   FClientDir := TPath.Combine(TPath.GetDirectoryName(ParamStr(0)), CLIENT_DIR);
   FClientVersions := [];
   for FBVer := Low(TFBVersion) to High(TFBVersion) do
-    if TFile.Exists(TPath.Combine(ClientDir, Format(CLIENT_LIBNAME, [TZeosFB.VersionToString(FBVer, True)]))) then
+    if TFile.Exists(TPath.Combine(FClientDir, Format(CLIENT_LIBNAME, [TZeosFB.VersionToString(FBVer, True)]))) then
       begin
         Include(FClientVersions, FBVer);
         FBVerType.ServerType := fbtClientServer;
@@ -391,6 +529,8 @@ begin
   end;
 
   // ワークフォルダの設定
+  if CommandLineMode then
+    Exit;
   SetWorkDir(dWorkDir);
 
   // Drag&Drop の許可
@@ -710,9 +850,25 @@ begin
   FDstConnectionRec.Version := Result;
 end;
 
+function TfrmMain.EmbeddedLibraryPath(Version: TFBVersion): string;
+var
+  Directory, Provider: string;
+begin
+  Directory := TPath.Combine(EmbeddedDir, TZeosFB.VersionToString(Version));
+  Provider := TZeosFB.EmbeddedProvider(Version);
+  if Provider = '' then
+    Result := TPath.Combine(Directory, EMBEDDED_LIBNAME)
+  else if TFile.Exists(TPath.Combine(Directory, 'plugins' + PathDelim + Provider + '.dll')) then
+    Result := TPath.Combine(Directory, 'fbclient.dll')
+  else
+    Exit('');
+  if not TFile.Exists(Result) then
+    Result := '';
+end;
+
 function TfrmMain.GetEmbeddedDllName: string;
 begin
-  Result := TPath.Combine(EmbeddedDir, TZeosFB.VersionToString(Self.DestinationVersion)) + PathDelim + EMBEDDED_LIBNAME;
+  Result := EmbeddedLibraryPath(DestinationVersion);
 end;
 
 function TfrmMain.GetSourceHostName: string;
@@ -946,15 +1102,6 @@ end;
 // Functions
 // -----------------------------------------------------------------------------
 
-function TfrmMain.GetEmbeddedVersion: TFBVersion;
-// 選択されている Embedded Server のバージョンを得る
-begin
-  if cbDstVersion.Items.Count = 0 then
-    Result := fbv10
-  else
-    Result := TFBVersion(Integer(cbDstVersion.Items.Objects[cbDstVersion.ItemIndex]));
-end;
-
 procedure TfrmMain.SetDestinationCharSetList;
 // Destination CharSet の変更
 var
@@ -967,11 +1114,19 @@ begin
   // コピー先のバージョンで使える文字コードのみを列挙
   for i:=Low(CharSets) to High(CharSets) do
     begin
-      if (CharSets[i].MinimumVersion > GetEmbeddedVersion) then
+      if (CharSets[i].MinimumVersion > DestinationVersion) then
         Continue;
       cbDstCharset.Items.Add(CharSets[i].Name);
     end;
   cbDstCharset.Sorted := True;
+end;
+
+function ConversionDialog(const Msg: string; DialogType: TMsgDlgType;
+  Buttons: TMsgDlgButtons; HelpCtx: Longint): Integer;
+begin
+  if CommandLineMode then
+    raise Exception.Create(Msg);
+  Result := MessageDlg(Msg, DialogType, Buttons, HelpCtx);
 end;
 
 function TfrmMain.CheckError: Boolean;
@@ -993,7 +1148,7 @@ begin
       // コピー元データベースファイルの存在チェック
       if not TFile.Exists(Self.SourceDataBaseName) then
         begin
-          MessageDlg(ERR_MSG_FILENOTEXISTS, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+          ConversionDialog(ERR_MSG_FILENOTEXISTS, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
           edSrcDatabase.SetFocus;
           Exit;
         end;
@@ -1001,7 +1156,7 @@ begin
       // ネットワークパスかどうかのチェック
       if TPathEx.IsRemotePath(Self.SourceDataBaseName) then
         begin
-          MessageDlg(ERR_MSG_REMOTEPATHSPECIFIED, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+          ConversionDialog(ERR_MSG_REMOTEPATHSPECIFIED, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
           edSrcDatabase.SetFocus;
           Exit;
         end;
@@ -1027,7 +1182,7 @@ begin
 
   if not OpenFlg then
     begin
-      MessageDlg(ERR_MSG_DATABASEOPENERROR + sLineBreak + sLineBreak + Msg, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+      ConversionDialog(ERR_MSG_DATABASEOPENERROR + sLineBreak + sLineBreak + Msg, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
       edSrcDatabase.SetFocus;
       Exit;
     end;
@@ -1040,7 +1195,7 @@ begin
           if (TPath.GetDirectoryName(Self.DestinationDataBaseName) = '') or
              (not TDirectory.Exists(TPath.GetDirectoryName(Self.DestinationDataBaseName))) then
             begin
-              MessageDlg(ERR_MSG_DIRECTORYNOTEXISTS, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+              ConversionDialog(ERR_MSG_DIRECTORYNOTEXISTS, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
               edDstDatabase.SetFocus;
               Exit;
             end;
@@ -1049,7 +1204,7 @@ begin
       // コピー元データベースファイルとコピー先データベースファイルの同一性チェック
       if  SameFileName(Self.SourceHostName + Self.SourceDataBaseName, Self.DestinationHostName + Self.DestinationDataBaseName) then
         begin
-          MessageDlg(ERR_MSG_SAMEFILE, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+          ConversionDialog(ERR_MSG_SAMEFILE, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
           edDstDatabase.SetFocus;
           Exit;
         end;
@@ -1058,7 +1213,7 @@ begin
       if IsLocalHost(Self.DestinationHostName) then
         if TFile.Exists(Self.DestinationDataBaseName) then
           begin
-            if MessageDlg(CON_MSG_FILEEXIST, TMsgDlgType.mtConfirmation, [TMsgDlgBtn.mbYes, TMsgDlgBtn.mbNo], -1) <> ID_YES then
+            if ConversionDialog(CON_MSG_FILEEXIST, TMsgDlgType.mtConfirmation, [TMsgDlgBtn.mbYes, TMsgDlgBtn.mbNo], -1) <> ID_YES then
               begin
                 edDstDatabase.SetFocus;
                 Exit;
@@ -1230,6 +1385,12 @@ var
     finally
       Err.Free;
     end;
+    if CommandLineMode then
+      begin
+        frmLogViewer.SaveMessage(TPath.Combine(WorkDir, FB_METADATA_FILE));
+        frmLogViewer.SaveError(TPath.Combine(WorkDir, FB_ERROR_FILE));
+        raise Exception.Create(aText);
+      end;
   end;
   { WriteError END }
 
@@ -1508,7 +1669,7 @@ begin
   FIsConvertRunning := True;
   try
     // コピー先データベースが存在すれば削除
-    if (not MetadataOnly) and TFile.Exists(Self.DestinationDataBaseName) then
+    if (not CommandLineMode) and (not MetadataOnly) and TFile.Exists(Self.DestinationDataBaseName) then
       TFile.Delete(Self.DestinationDataBaseName);
 
     // ワークフォルダ内をクリーンナップ
@@ -1526,7 +1687,7 @@ begin
     // Client / Server のバージョンチェック
     FBVer := TZeosFB.VersionToFBVersion(FBExtract.Firebird.GetServerInfo.Version);
     if FBVer <> Self.SourceVersion then
-      if MessageDlg(Format(CON_MSG_VERSIONMISMATCH1, [Format('[%s]' ,[SOURCE_STR]), TZeosFB.VersionToString(Self.SourceVersion), TZeosFB.VersionToString(FBVer)]),
+      if ConversionDialog(Format(CON_MSG_VERSIONMISMATCH1, [Format('[%s]' ,[SOURCE_STR]), TZeosFB.VersionToString(Self.SourceVersion), TZeosFB.VersionToString(FBVer)]),
         TMsgDlgType.mtConfirmation, [TMsgDlgBtn.mbYes, TMsgDlgBtn.mbNo], -1) <> ID_YES then
           begin
             cbSrcVersion.SetFocus;
@@ -1574,6 +1735,7 @@ begin
           // http://www.firebirdsql.org/manual/ufb-cs-embedded.html
           case Self.DestinationServerType of
             fbtEmbedded:
+              if Self.DestinationVersion < fbv30 then
               begin
                 // firebird.conf をコピー
                 ConfigFileName := TPath.Combine(TPath.GetDirectoryName(ParamStr(0)), FB_CONFIG_FILE);
@@ -1609,7 +1771,7 @@ begin
                 // Client / Server のバージョンチェック
                 FBVer := TZeosFB.VersionToFBVersion(Firebird.GetServerInfo.Version);
                 if FBVer <> Self.DestinationVersion then
-                  if MessageDlg(Format(CON_MSG_VERSIONMISMATCH1, [Format('[%s]' ,[DESTINATON_STR]), TZeosFB.VersionToString(Self.DestinationVersion), TZeosFB.VersionToString(FBVer)]),
+                  if ConversionDialog(Format(CON_MSG_VERSIONMISMATCH1, [Format('[%s]' ,[DESTINATON_STR]), TZeosFB.VersionToString(Self.DestinationVersion), TZeosFB.VersionToString(FBVer)]),
                     TMsgDlgType.mtConfirmation, [TMsgDlgBtn.mbYes, TMsgDlgBtn.mbNo], -1) <> ID_YES then
                       begin
                         cbDstVersion.SetFocus;
@@ -1635,19 +1797,18 @@ begin
               begin
                 // DatabaseName
                 FileSpec := DestinationDataBaseName;
-                // fbembed.dll
                 FBLibName := Self.EmbeddedDllName;
               end;
             CreateDBString := Firebird.CreateDatabase
                                 (Self.DestinationVersion, FBLibName,
-                                 Self.DestinationHostName, Self.DestinationPort,
+                                 Firebird.HostName, Firebird.Port,
                                  FileSpec, Self.DestinationCharset,
-                                 Self.DestinationUserName, Self.DestinationPassword,
+                                 Firebird.UserName, Firebird.Password,
                                  PageSize);
           except
             on E: EZSQLException do
               begin
-                MessageDlg(ERR_MSG_CANTCREATEDATABASE + sLineBreak + sLineBreak + E.Message, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
+                ConversionDialog(ERR_MSG_CANTCREATEDATABASE + sLineBreak + sLineBreak + E.Message, TMsgDlgType.mtError, [TMsgDlgBtn.mbOK], -1);
                 Exit;
               end;
           end;
@@ -1671,7 +1832,8 @@ begin
           Width  := 640;
           Height := 600;
           InitLog;
-          Show;
+          if not CommandLineMode then
+            Show;
           Application.ProcessMessages;
         end;
 
@@ -1978,8 +2140,10 @@ begin
     end;
 
     // ログビューアが閉じられていたらダイアログで終了を出す
+    if CommandLineMode then
+      Exit;
     if not frmLogViewer.Showing then
-      MessageDlg(INF_MSG_DONE + sLineBreak + Dmy, TMsgDlgType.mtInformation, [TMsgDlgBtn.mbOK], -1)
+      ConversionDialog(INF_MSG_DONE + sLineBreak + Dmy, TMsgDlgType.mtInformation, [TMsgDlgBtn.mbOK], -1)
     // ログビューアが最小化/最大化されていたら元に戻す
     else if frmLogViewer.WindowState <>  wsMinimized then
       frmLogViewer.WindowState := wsNormal;
@@ -2152,7 +2316,8 @@ var
   DstQuery, SrcQuery: TZQuery;
   SelectSQL: TSelectSQL;
   InsertSQL: TInsertSQL;
-  dFields, dValues: string;
+  dFields, dValues, Value: string;
+  Bytes: TBytes;
   i: Integer;
   Stream: TMemoryStream;
   MsgRec: PMessageRec;
@@ -2174,8 +2339,9 @@ begin
 
     DstQuery.SQL.Text := '';
     // コピー元テーブルの準備
-    SelectSQL.SELECT := Format('FIRST %d SKIP %d *',
-                          [BulkRec.SplitDataRec.SplitSize, BulkRec.SplitDataRec.Index * BulkRec.SplitDataRec.SplitSize]);
+    SelectSQL.SELECT := Format('FIRST %d SKIP %d %s',
+      [BulkRec.SplitDataRec.SplitSize, BulkRec.SplitDataRec.Index * BulkRec.SplitDataRec.SplitSize,
+       BulkRec.SplitDataRec.SelectFields]);
     SelectSQL.FROM   := QuotedString(BulkRec.TableName);
     SrcQuery.SQL.Text := SelectSQL.Build;
     SrcQuery.Open;
@@ -2190,7 +2356,10 @@ begin
             for i:=0 to SrcQuery.FieldCount-1 do
               begin
                 dFields := dFields + QuotedString(SrcQuery.Fields[i].FieldName);
-                dValues := dValues + Format(':P%.4d', [i]);
+                Value := Format(':P%.4d', [i]);
+                if i < Length(BulkRec.SplitDataRec.CastTypes) then
+                  Value := TFBExtractor.ImportValueExpression(Value, BulkRec.SplitDataRec.CastTypes[i]);
+                dValues := dValues + Value;
                 if i < SrcQuery.FieldCount-1 then
                   begin
                     dFields := dFields + SEPARATOR_STR;
@@ -2235,6 +2404,14 @@ begin
                       DstQuery.Params[i].AsString   := SrcQuery.Fields[i].AsString;
                   ftDate, ftTime, ftDateTime, ftTimeStamp:
                     DstQuery.Params[i].AsDateTime   := SrcQuery.Fields[i].AsDateTime;
+                  ftBytes, ftVarBytes:
+                    begin
+                      Bytes := SrcQuery.Fields[i].AsBytes;
+                      if Length(Bytes) = 0 then
+                        DstQuery.Params[i].AsString := ''
+                      else
+                        DstQuery.Params[i].AsBytes := Bytes;
+                    end;
                   ftBlob:
                     begin
                       Stream.Clear;

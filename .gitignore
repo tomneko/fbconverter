@@ -55,3 +55,10 @@ __history/
 
 # Castalia statistics file
 *.stat
+
+# Version-pinned build dependencies fetched from upstream
+/Library/zeos-8.0-patches-r8528/
+/Library/asynccalls-dd26254/
+/Source/Win32/Release/fb-smoke/
+/Source/Win64/Release/fb-smoke/
+/Source/Win*/Release/Embedded/[345].0/

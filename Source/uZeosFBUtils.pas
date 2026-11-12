@@ -17,8 +17,8 @@ interface
 uses
   System.Classes, System.SysUtils, System.Types, System.RegularExpressions,
   Windows, Data.DB, ZAbstractConnection, ZConnection, ZAbstractRODataset,
-  ZAbstractDataset, ZDataset, ZSqlMetadata, ZDbcIntfs, ZCompatibility,
-  ZPlainLoader, ZPlainFirebirdDriver, ZPlainFirebirdInterbaseConstants,
+  ZAbstractDataset, ZDataset, ZSqlMetadata, ZDbcIntfs, ZDatasetUtils, ZDbcProperties,
+  ZPlainLoader, ZPlainFirebirdInterbaseDriver,
   System.SyncObjs, uFBRawAccess, uSQLBuilder
   {$IFDEF USEINDY}, IdBaseComponent, IdComponent, IdTCPConnection, IdTCPClient, IdExceptionCore{$ENDIF};
 
@@ -26,7 +26,7 @@ type
   TFBQueryAray = array of TZQuery;
   TFBReadOnlyQueryAray = array of TZReadOnlyQuery;
   TDataSourceAray = array of TDataSource;
-  TFBVersion = (fbvUnknown, fbv10, fbv15, fbv20, fbv21, fbv25, fbv30);
+  TFBVersion = (fbvUnknown, fbv10, fbv15, fbv20, fbv21, fbv25, fbv30, fbv40, fbv50);
   TFBServerType = (fbtUnknown, fbtClientServer, fbtEmbedded);
   TFBVersions = set of TFBVersion;
 
@@ -121,7 +121,7 @@ type
     FTransactIsolationLevel: TZTransactIsolationLevel;
     FUserName: string;
     FWorkSQL: TStringList;
-    function FBVersionToString(Version: TFBVersion): string;
+    procedure ConfigureEmbeddedProvider(AConnection: TZConnection);
     procedure FreeQueryArray;
     function GetConnectonInfo: TConnectionRec;
     procedure InitQueryArray;
@@ -144,6 +144,7 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     // DB Method
+    class function EmbeddedProvider(Version: TFBVersion): string;
     class function BuildFileSpec(aHostName: string; aPort: uInt16; aDatabaseName: string): string;
     procedure Commit;
     function Connect: Boolean;
@@ -182,7 +183,7 @@ type
   end;
 
 const
-  VERSION_NUMBER: array [TFBVersion] of Single = (0, 1.0, 1.5, 2.0, 2.1, 2.5, 3.0);
+  VERSION_NUMBER: array [TFBVersion] of string = ('0.0', '1.0', '1.5', '2.0', '2.1', '2.5', '3.0', '4.0', '5.0');
 
   NULL_STRING   = 'NULL';
   TERM_CHAR     = ';';
@@ -230,12 +231,17 @@ var
 begin
   Result := DmyVersion;
   Match := TRegEx.Match(s, REGEXP_VERSION_EXP, []);
+  if not Match.Success then
+    // Firebird 1.0 reports a three-part InterBase compatibility version before the product name.
+    Match := TRegEx.Match(s, '\bFirebird\s+(\d+)\.(\d+)(?:\.(\d+))?\b', [roIgnoreCase]);
   if Match.Success then
     begin
       Result.MajorVersion   := StrToIntDef(Match.Groups[1].Value, 0);
       Result.MinorVersion   := StrToIntDef(Match.Groups[2].Value, 0);
-      Result.ReleaseVersion := StrToIntDef(Match.Groups[3].Value, 0);
-      Result.BuildVersion   := StrToIntDef(Match.Groups[4].Value, 0);
+      if Match.Groups.Count > 3 then
+        Result.ReleaseVersion := StrToIntDef(Match.Groups[3].Value, 0);
+      if Match.Groups.Count > 4 then
+        Result.BuildVersion := StrToIntDef(Match.Groups[4].Value, 0);
     end;
 end;
 
@@ -264,6 +270,8 @@ begin
 
   // Connection
   FConnection := TZConnection.Create(Self);
+  FConnection.Protocol := 'firebird';
+  FConnection.Properties.Values['FirebirdAPI'] := 'legacy';
   FConnection.LoginPrompt            := False;
   FConnection.HostName               := FHostName;
   FConnection.Port                   := FPort;
@@ -361,6 +369,7 @@ begin
       Password               := Self.Password;
       ServerCharset          := Self.ServerCharset;
       ClientCharset          := Self.ClientCharset;
+      ServerType             := Self.ServerType;
       Version                := Self.Version;
       LibraryLocation        := Self.LibraryLocation;
       TransactIsolationLevel := Self.TransactIsolationLevel;
@@ -378,7 +387,6 @@ procedure TZeosFB.SetFBVersion(const Value: TFBVersion);
 // Firebird バージョン指定
 begin
   FFBVersion := Value;
-  FConnection.Protocol := FBVersionToString(Value);
 end;
 
 procedure TZeosFB.SetPort(const Value: UInt32);
@@ -457,6 +465,7 @@ begin
   Self.Password               := Value.Password;
   Self.ServerCharset          := Value.ServerCharset;
   Self.ClientCharset          := Value.ClientCharset;
+  Self.ServerType             := Value.ServerType;
   Self.Version                := Value.Version;
   Self.LibraryLocation        := Value.LibraryLocation;
   Self.TransactIsolationLevel := Value.TransactIsolationLevel;
@@ -480,7 +489,7 @@ begin
   result := fbvUnknown;
   for v := Low(TFBVersion) to High(TFBVersion) do
     begin
-      if FormatFloat('#0.0', VERSION_NUMBER[v]) = Format('%d.%d', [Version.MajorVersion, Version.MinorVersion]) then
+      if VERSION_NUMBER[v] = Format('%d.%d', [Version.MajorVersion, Version.MinorVersion]) then
         begin
           result := v;
           Break;
@@ -491,15 +500,9 @@ end;
 class function TZeosFB.VersionToString(Version: TFBVersion; ExcludeDecimalPoint: Boolean): string;
 // バージョン -> バージョン文字列
 begin
-  Result := FormatFloat('#0.0', VERSION_NUMBER[Version]);
+  Result := VERSION_NUMBER[Version];
   if ExcludeDecimalPoint then
     Result := StringReplace(Result, '.', '', [rfReplaceAll]);
-end;
-
-function TZeosFB.FBVersionToString(Version: TFBVersion): string;
-// バージョン -> バージョン文字列
-begin
-  Result := 'firebird-' + VersionToString(Version);
 end;
 
 procedure TZeosFB.LoadFromBlob(Stream: TStream; Blob: TBlobField);
@@ -723,10 +726,9 @@ var
   isc_interprete: Tisc_interprete;
   isc_vax_integer: Tisc_vax_integer;
   Item: Byte;
-  ItemLen, SubItemLen: Integer;
-  ItemStr: string;
+  ItemLen: Integer;
   LibraryLoader: TZNativeLibraryLoader;
-  ItemPtr, P, SP : PByte;
+  P: PByte;
   ServiceHandle: PISC_SVC_HANDLE;
   db_items, res_buffer, mes_buffer, ServiceName, SPB: TBytes;
   Status: ISC_STATUS_VECTOR;
@@ -778,21 +780,10 @@ begin
                 Inc(P);
                 ItemLen := isc_vax_integer(P, 2);
                 Inc(P, 2);
-                ItemPtr := P;
-                ItemStr := '';
                 case Item of
                   isc_info_svc_server_version:
                     begin
-                      repeat
-                        SP := ItemPtr;
-//                      SubItem := SP^;
-                        Inc(SP);
-                        SubItemLen := isc_vax_integer(SP, 1);
-                        Inc(SP);
-                        ItemStr := ItemStr + TEncoding.ANSI.GetString(res_buffer, SP - PByte(res_buffer), SubItemLen);
-                        Inc(SP, SubItemLen);
-                      until (SP >= ItemPtr + ItemLen);
-                      Result.VersionStr := ItemStr;
+                      Result.VersionStr := TEncoding.ANSI.GetString(res_buffer, P - PByte(res_buffer), ItemLen);
                       Result.Version := ExtractVersion(Result.VersionStr);
                     end;
                   isc_info_svc_get_env:
@@ -858,11 +849,33 @@ end;
 // データベースメソッド
 // -----------------------------------------------------------------------------
 
+class function TZeosFB.EmbeddedProvider(Version: TFBVersion): string;
+begin
+  case Version of
+    fbv30: Result := 'Engine12';
+    fbv40, fbv50: Result := 'Engine13';
+  else
+    Result := '';
+  end;
+end;
+
+procedure TZeosFB.ConfigureEmbeddedProvider(AConnection: TZConnection);
+var
+  Provider: string;
+begin
+  Provider := EmbeddedProvider(Version);
+  if (ServerType = fbtEmbedded) and (Provider <> '') then
+    AConnection.Properties.Values[ConnProps_isc_dpb_config] := 'Providers = ' + Provider
+  else
+    AConnection.Properties.Values[ConnProps_isc_dpb_config] := '';
+end;
+
 function TZeosFB.Connect: Boolean;
 // DB に接続
 begin
   if FConnection.Connected then
     FConnection.Connected := False;
+  ConfigureEmbeddedProvider(FConnection);
   FConnection.Connected := True;
   Result := FConnection.Connected;
 end;
@@ -914,14 +927,36 @@ begin
   dConnection := TZConnection.Create(Self);
   try
     DSQL := Format(CREATE_DB, [DBFileName, UserName, Password, PageSize, CharSet]);
-    dConnection.Protocol := FBVersionToString(Version);
+    dConnection.Protocol := 'firebird';
     dConnection.HostName := HostName;
     dConnection.Port := Port;
     dConnection.Database := DBFileName;
     dConnection.LibraryLocation := LibName;
     dConnection.Properties.Clear;
+    dConnection.Properties.Values['FirebirdAPI'] := 'legacy';
     dConnection.Properties.Values['dialect'] := IntToStr(Dialect);
-    dConnection.Properties.Values['CreateNewDatabase'] := DSQL;
+    ConfigureEmbeddedProvider(dConnection);
+    if (HostName = '') and
+       (((ServerType = fbtEmbedded) and (Version >= fbv30)) or
+        ((Version >= fbv25) and (CharSet = 'UNICODE_FSS'))) then
+      begin
+        // Pass the charset and provider in the DPB to the native create API.
+        dConnection.Properties.Values[ConnProps_CreateNewDatabase] := 'True';
+        dConnection.Properties.Values[ConnProps_isc_dpb_set_db_charset] := CharSet;
+        dConnection.Properties.Values[ConnProps_isc_dpb_page_size] := IntToStr(PageSize);
+        dConnection.Properties.Values[ConnProps_isc_dpb_set_db_sql_dialect] := IntToStr(Dialect);
+        if CharSet = 'CP943C' then
+          dConnection.ClientCodepage := 'UTF8'
+        else
+          dConnection.ClientCodepage := CharSet;
+      end
+    else
+      begin
+        dConnection.Properties.Values[ConnProps_CreateNewDatabase] := DSQL;
+        // Zeos can repeatedly reconnect after creating a NONE database with an implicit code page.
+        if CharSet = 'NONE' then
+          dConnection.ClientCodepage := CharSet;
+      end;
     dConnection.User     := UserName;
     dConnection.Password := Password;
     dConnection.Connect;

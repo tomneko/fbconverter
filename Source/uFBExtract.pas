@@ -92,6 +92,8 @@ type
     SplitSize: Integer;
     SplitCount: Integer;
     LastSize: Integer;
+    SelectFields: string;
+    CastTypes: TArray<string>;
   end;
 
   { TFBExtractor }
@@ -109,6 +111,9 @@ type
     function BuildFieldString(FieldName: string; DomainFlg: Boolean = False): string;
     function GetFieldSubTypeString(FieldSubType: Integer): string;
     function GetFieldTypeString(FieldType: Integer): string;
+    function BuildInt128Type(const Field: TFieldType): string;
+    function BuildCharacterType(const Field: TFieldType): string;
+    procedure BuildDataProjection(const TableName: string; var SplitData: TSplitDataRec);
     function BuildUniqueKey(TableName: string; IsPrimary: Boolean = True): string;
     procedure SetBrobOutputDir(const Value: string);
     procedure SetIsExtractBlobData(const Value: Boolean);
@@ -152,6 +157,7 @@ type
     function EnumViews: TStringDynArray;
     function GetCharsetInfoByID(CharSetID: Integer): TFBCharset;
     function GetCharsetInfoByName(CharSetName: string): TFBCharset;
+    class function ImportValueExpression(const Value, CastType: string): string; static;
     class function PreBuildTableData(aExtractor: TFBExtractor; TableName: string; SplitSize: Integer = 1000): TSplitDataRec;
     class function BuildTableData(aExtractor: TFBExtractor; TableName: string; TableIndex: Integer; var SplitDataRec: TSplitDataRec): TInsRecDynArray;
     procedure Init;
@@ -164,7 +170,7 @@ type
     property ConvertFromIntToBigInt: Boolean read FConvertFromIntToBigInt write FConvertFromIntToBigInt;
   end;
 
-  TFieldTypes = array [0..12] of TFieldType;
+  TFieldTypes = array [0..18] of TFieldType;
   TFieldSubTypes = array [0..2] of TFieldType;
   TColmnType = (ctDataType, ctComputed, ctDomain);
   TCharSets = array [0..51] of TFBCharSet;
@@ -186,7 +192,16 @@ const
   fft_Time      = 13;  // TIME
   fft_Char      = 14;  // CHAR(n)
   fft_BigInt    = 16;  // BIGINT (Dialect 3)
+  fft_Boolean   = 23;
+  fft_DecFloat16 = 24;
+  fft_DecFloat34 = 25;
+  fft_Int128    = 26;
   fft_Double    = 27;  // DECIMAL(p, s) / DOUBLE PRECISION / NUMERIC(p,s)
+  fft_TimeTZ    = 28;
+  fft_TimeStampTZ = 29;
+  TimestampWithZone = 'TIMESTAMP WITH TIME ZONE';
+  TimeWithZone = 'TIME WITH TIME ZONE';
+  OctetsCharsetID = 1;
   fft_TimeStamp = 35;  // TIMESTAMP
   fft_VarChar   = 37;  // VARCHAR(n)
   fft_CString   = 40;  // CSTRING
@@ -226,7 +241,13 @@ const
     (FieldType: fft_Time;      TypeName: 'TIME'            ),
     (FieldType: fft_Char;      TypeName: 'CHAR'            ),
     (FieldType: fft_BigInt;    TypeName: 'BIGINT'          ),
+    (FieldType: fft_Boolean;   TypeName: 'BOOLEAN'         ),
+    (FieldType: fft_DecFloat16; TypeName: 'DECFLOAT(16)'    ),
+    (FieldType: fft_DecFloat34; TypeName: 'DECFLOAT(34)'    ),
+    (FieldType: fft_Int128;    TypeName: 'INT128'          ),
     (FieldType: fft_Double;    TypeName: 'DOUBLE PRECISION'),
+    (FieldType: fft_TimeTZ;    TypeName: TimeWithZone),
+    (FieldType: fft_TimeStampTZ; TypeName: TimestampWithZone),
     (FieldType: fft_TimeStamp; TypeName: 'TIMESTAMP'       ),
     (FieldType: fft_VarChar;   TypeName: 'VARCHAR'         ),
     (FieldType: fft_CString;   TypeName: 'CSTRING'         ),
@@ -449,8 +470,7 @@ function TFBExtractor.BuildFieldString(FieldName: string; DomainFlg: Boolean): s
 const
   SelectSQL: TSelectSQL = (SELECT: '*'; FROM: 'RDB$FIELDS'; WHERE: '(RDB$FIELD_NAME = :_FIELD_NAME)');
 var
-  CharLen, Precision: Integer;
-  CharsetInfo: TFBCharSet;
+  Precision: Integer;
   FieldRec: TFieldType;
   FieldStr, FieldSubStr, RetStr: string;
 begin
@@ -504,7 +524,9 @@ begin
           else
             begin
               // 通常カラム
-              if FieldRec.Scale < 0 then
+              if FieldRec.FieldType = fft_Int128 then
+                FieldStr := BuildInt128Type(FieldRec)
+              else if FieldRec.Scale < 0 then
                 begin
                   // 小数点を持つ型
                   if FindField('RDB$FIELD_PRECISION') = nil then
@@ -538,20 +560,7 @@ begin
                   case FieldRec.FieldType of
                     fft_Char,
                     fft_VarChar:
-                      begin
-                        CharsetInfo := GetCharsetInfoByID(FieldRec.CharSetID);
-                        // 変換先の BPC が変換元の BPC より大きく、
-                        // かつ "文字数×変換先 BPC" が 32765 を超えるようなら文字数を変換
-                        if (CharsetInfo.BytesPerCharacter < TargetCharset.BytesPerCharacter) and
-                           ((FieldRec.CharcterLength * TargetCharset.BytesPerCharacter) > 32765) then
-                          CharLen := (FieldRec.CharcterLength div TargetCharset.BytesPerCharacter)
-                        else
-                          CharLen := FieldRec.CharcterLength;
-                        FieldStr := FieldStr + Format('(%d)', [CharLen]);
-                        // 文字コード
-                        if FieldRec.CharSetID <> DefaultCharset.ID then
-                          FieldStr := FieldStr + Format(' CHARACTER SET %s', [CharsetInfo.Name]);
-                      end;
+                      FieldStr := BuildCharacterType(FieldRec);
                     fft_Blob:
                       begin
                         FieldSubStr := GetFieldSubTypeString(FieldRec.FieldSubType);
@@ -605,8 +614,7 @@ end;
 function TFBExtractor.BuildArgumentString(Query: TZQuery): string;
 // 引数の生成
 var
-  CharLen, Precision: Integer;
-  CharsetInfo: TFBCharSet;
+  Precision: Integer;
   FieldRec: TFieldType;
   FieldStr, FieldSubStr: string;
 begin
@@ -624,7 +632,9 @@ begin
         FieldRec.Precision     := FieldByName('RDB$FIELD_PRECISION').AsInteger;
       FieldRec.Scale         := FieldByName('RDB$FIELD_SCALE').AsInteger;
       FieldRec.CharSetID     := FieldByName('RDB$CHARACTER_SET_ID').AsInteger;
-      if FieldRec.Scale < 0 then
+      if FieldRec.FieldType = fft_Int128 then
+        FieldStr := BuildInt128Type(FieldRec)
+      else if FieldRec.Scale < 0 then
         begin
           // 小数点を持つ型
           if FindField('RDB$FIELD_PRECISION') = nil then
@@ -659,20 +669,7 @@ begin
             fft_Char,
             fft_VarChar,
             fft_CString:
-              begin
-                CharsetInfo := GetCharsetInfoByID(FieldRec.CharSetID);
-                // 変換先の BPC が変換元の BPC より大きく、
-                // かつ "文字数×変換先 BPC" が 32765 を超えるようなら文字数を変換
-                if (CharsetInfo.BytesPerCharacter < TargetCharset.BytesPerCharacter) and
-                   ((FieldRec.CharcterLength * TargetCharset.BytesPerCharacter) > 32765) then
-                  CharLen := (FieldRec.CharcterLength div TargetCharset.BytesPerCharacter)
-                else
-                  CharLen := FieldRec.CharcterLength;
-                FieldStr := FieldStr + Format('(%d)', [CharLen]);
-                // 文字コード
-                if FieldRec.CharSetID <> DefaultCharset.ID then
-                  FieldStr := FieldStr + Format(' CHARACTER SET %s', [CharsetInfo.Name]);
-              end;
+              FieldStr := BuildCharacterType(FieldRec);
             fft_Blob:
               begin
                 FieldSubStr := GetFieldSubTypeString(FieldRec.FieldSubType);
@@ -1426,6 +1423,82 @@ begin
   Result := Result + ')' + Dmy + TERM_CHAR;
 end;
 
+procedure TFBExtractor.BuildDataProjection(const TableName: string; var SplitData: TSplitDataRec);
+var
+  Field: TFieldType;
+  ColumnName, Expression, CastType: string;
+  Projection, CastTypes: TStringList;
+  ZoneStart: Integer;
+begin
+  Projection := TStringList.Create;
+  CastTypes := TStringList.Create;
+  try
+    with FB.Query[0] do
+      begin
+        SQL.Text := 'SELECT RF.RDB$FIELD_NAME, F.RDB$FIELD_TYPE, F.RDB$FIELD_SUB_TYPE, ' +
+          'F.RDB$FIELD_PRECISION, F.RDB$FIELD_SCALE FROM RDB$RELATION_FIELDS RF ' +
+          'JOIN RDB$FIELDS F ON RF.RDB$FIELD_SOURCE = F.RDB$FIELD_NAME ' +
+          'WHERE RF.RDB$RELATION_NAME = :TABLE_NAME ORDER BY RF.RDB$FIELD_POSITION';
+        ParamByName('TABLE_NAME').AsString := TableName;
+        Open;
+        try
+          while not Eof do
+            begin
+              ColumnName := QuotedString(Trim(Fields[0].AsString));
+              Field.FieldType := Fields[1].AsInteger;
+              Field.FieldSubType := Fields[2].AsInteger;
+              Field.Precision := Fields[3].AsInteger;
+              Field.Scale := Fields[4].AsInteger;
+              Expression := ColumnName;
+              CastType := '';
+              case Field.FieldType of
+                fft_Int128: CastType := BuildInt128Type(Field);
+                fft_DecFloat16, fft_DecFloat34, fft_TimeTZ, fft_TimeStampTZ:
+                  CastType := GetFieldTypeString(Field.FieldType);
+              end;
+              if (CastType = TimestampWithZone) or (CastType = TimeWithZone) then
+                begin
+                  // The timestamp includes the ten-character ISO date and a space.
+                  ZoneStart := 15;
+                  if CastType = TimestampWithZone then
+                    Inc(ZoneStart, 11);
+                  Expression := Format('CAST(%0:s AT TIME ZONE ''UTC'' AS VARCHAR(32)) || ''|'' || ' +
+                    'SUBSTRING(CAST(%0:s AS VARCHAR(128)) FROM %1:d) AS %0:s', [ColumnName, ZoneStart]);
+                end
+              else if CastType <> '' then
+                Expression := Format('CAST(%0:s AS VARCHAR(128)) AS %0:s', [ColumnName]);
+              Projection.Add(Expression);
+              CastTypes.Add(CastType);
+              Next;
+            end;
+        finally
+          Close;
+        end;
+      end;
+    if Projection.Count > 0 then
+      begin
+        SplitData.SelectFields := string.Join(', ', Projection.ToStringArray);
+        SplitData.CastTypes := CastTypes.ToStringArray;
+      end;
+  finally
+    CastTypes.Free;
+    Projection.Free;
+  end;
+end;
+
+class function TFBExtractor.ImportValueExpression(const Value, CastType: string): string;
+begin
+  if (CastType = TimestampWithZone) or (CastType = TimeWithZone) then
+    // Restore the original zone from the UTC value, even in a DST overlap.
+    Result := Format('(SELECT CAST(SUBSTRING(V FROM 1 FOR POSITION(''|'' IN V) - 1) AS %1:s) ' +
+      'AT TIME ZONE (SUBSTRING(V FROM POSITION(''|'' IN V) + 1)) FROM ' +
+      '(SELECT CAST(%0:s AS VARCHAR(128)) AS V FROM RDB$DATABASE) Z)', [Value, CastType])
+  else if CastType <> '' then
+    Result := Format('CAST(CAST(%s AS VARCHAR(128)) AS %s)', [Value, CastType])
+  else
+    Result := Value;
+end;
+
 class function TFBExtractor.PreBuildTableData(aExtractor: TFBExtractor; TableName: string; SplitSize: Integer): TSplitDataRec;
 // テーブルデータの生成
 var
@@ -1445,12 +1518,16 @@ begin
       Result.LastSize    := Result.RecordCount mod SplitSize;
       Close;
     end;
+  Result.SelectFields := '*';
+  if (Result.RecordCount > 0) and (aExtractor.Firebird.Version >= fbv40) then
+    aExtractor.BuildDataProjection(TableName, Result);
 end;
 
 class function TFBExtractor.BuildTableData(aExtractor: TFBExtractor; TableName: string; TableIndex: Integer; var SplitDataRec: TSplitDataRec): TInsRecDynArray;
 // テーブルデータの生成
 var
   BlobFileName, dFields, dComment, Dmy, Dmy2, dValues, dValues2, TextFileName: string;
+  Bytes: TBytes;
   C: Char;
   Cnt: Int64;
   HasControlChar: Boolean;
@@ -1468,7 +1545,8 @@ begin
         SetLength(Result, SplitDataRec.SplitSize);
 
       // データ処理
-      SelectSQL.SELECT := Format('FIRST %d SKIP %d *', [SplitDataRec.SplitSize, SplitDataRec.Index * SplitDataRec.SplitSize]);
+      SelectSQL.SELECT := Format('FIRST %d SKIP %d %s', [SplitDataRec.SplitSize,
+        SplitDataRec.Index * SplitDataRec.SplitSize, SplitDataRec.SelectFields]);
       SelectSQL.FROM   := TableName;
       SQL.Text := SelectSQL.Build;
       Open;
@@ -1488,9 +1566,25 @@ begin
                   dValues  := dValues  + NULL_STRING;
                   dValues2 := dValues2 + NULL_STRING;
                 end
+              else if (i < Length(SplitDataRec.CastTypes)) and (SplitDataRec.CastTypes[i] <> '') then
+                begin
+                  Dmy := ImportValueExpression(QuotedStr(Fields[i].AsString), SplitDataRec.CastTypes[i]);
+                  dValues := dValues + Dmy;
+                  dValues2 := dValues2 + Dmy;
+                end
               else
                 begin
                   case Fields[i].DataType of
+                    ftBytes, ftVarBytes:
+                      begin
+                        Bytes := Fields[i].AsBytes;
+                        SetLength(Dmy, Length(Bytes) * 2);
+                        if Length(Bytes) > 0 then
+                          BinToHex(PAnsiChar(Bytes), PChar(Dmy), Length(Bytes));
+                        Dmy := 'x' + QuotedStr(Dmy);
+                        dValues := dValues + Dmy;
+                        dValues2 := dValues2 + Dmy;
+                      end;
                     ftMemo, ftWideMemo,
                     ftString, ftWideString,
                     ftDate, ftTime, ftDateTime:
@@ -2172,6 +2266,37 @@ begin
                              'RDB$RELATIONS',
                              '(NOT RDB$VIEW_BLR IS NULL)', // 古い ODS には RDB$RELATION_TYPE が存在しない
                              'RDB$RELATION_ID');           // View は作成順でソートしないと破綻する
+end;
+
+function TFBExtractor.BuildCharacterType(const Field: TFieldType): string;
+var
+  CharLen: Integer;
+  CharsetInfo: TFBCharSet;
+begin
+  CharLen := Field.CharcterLength;
+  if (Field.CharSetID = OctetsCharsetID) and (Field.FieldSubType = ffst_char_FixedBinary) then
+    case Field.FieldType of
+      fft_Char: Exit(Format('BINARY(%d)', [CharLen]));
+      fft_VarChar: Exit(Format('VARBINARY(%d)', [CharLen]));
+    end;
+  CharsetInfo := GetCharsetInfoByID(Field.CharSetID);
+  if (Field.CharSetID <> OctetsCharsetID) and
+     (CharsetInfo.BytesPerCharacter < TargetCharset.BytesPerCharacter) and
+     (CharLen * TargetCharset.BytesPerCharacter > 32765) then
+    CharLen := CharLen div TargetCharset.BytesPerCharacter;
+  Result := GetFieldTypeString(Field.FieldType) + Format('(%d)', [CharLen]);
+  if (Field.CharSetID = OctetsCharsetID) or (Field.CharSetID <> DefaultCharset.ID) then
+    Result := Result + ' CHARACTER SET ' + CharsetInfo.Name;
+end;
+
+function TFBExtractor.BuildInt128Type(const Field: TFieldType): string;
+begin
+  case Field.FieldSubType of
+    1: Result := Format('NUMERIC(%d, %d)', [Field.Precision, -Field.Scale]);
+    2: Result := Format('DECIMAL(%d, %d)', [Field.Precision, -Field.Scale]);
+  else
+    Result := GetFieldTypeString(Field.FieldType);
+  end;
 end;
 
 function TFBExtractor.GetFieldTypeString(FieldType: Integer): string;

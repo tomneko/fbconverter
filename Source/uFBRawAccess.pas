@@ -13,7 +13,7 @@ unit uFBRawAccess;
 interface
 
 uses
-  System.Classes, System.SysUtils, ZPlainFirebirdInterbaseConstants, ZPlainLoader;
+  System.Classes, System.SysUtils, ZPlainFirebirdInterbaseDriver, ZPlainLoader;
 
 type
   TISC_SVC_HANDLE = PVoid;
@@ -27,35 +27,35 @@ type
   PPSTATUS_VECTOR   = ^PSTATUS_VECTOR;
 
   Tisc_service_attach     = function (status_vector: PSTATUS_VECTOR;
-                                      service_length: UShort;
+                                      service_length: Word;
                                       service: PByte;
                                       svc_handle: PISC_SVC_HANDLE;
-                                      spb_length: UShort;
+                                      spb_length: Word;
                                       spb: PByte): ISC_STATUS; stdcall;
   Tisc_service_detach     = function (status_vector: PSTATUS_VECTOR;
                                       service_handle: PISC_SVC_HANDLE): ISC_STATUS; stdcall;
   Tisc_service_query      = function (status_vector: PSTATUS_VECTOR;
                                       svc_handle: PISC_SVC_HANDLE;
                                       recv_handle: PISC_SVC_HANDLE; // Reserved
-                                      send_spb_length: UShort;
+                                      send_spb_length: Word;
                                       send_spb: PByte;
-                                      recv_spb_length: UShort;
+                                      recv_spb_length: Word;
                                       recv_spb: PByte;
-                                      buffer_length: UShort;
+                                      buffer_length: Word;
                                       buffer: PByte): ISC_STATUS; stdcall;
   Tisc_attach_database    = function (status_vector: PSTATUS_VECTOR;
-                                      db_name_length: UShort;
+                                      db_name_length: Word;
                                       db_name: PByte;
                                       db_handle: PISC_DB_HANDLE;
-                                      parm_buffer_length: UShort;
+                                      parm_buffer_length: Word;
                                       parm_buffer: PByte): ISC_STATUS; stdcall;
   Tisc_detach_database    = function (status_vector: PSTATUS_VECTOR;
                                       db_handle: PISC_DB_HANDLE): ISC_STATUS; stdcall;
   Tisc_database_info      = function (status_vector: PSTATUS_VECTOR;
                                       db_handle: PISC_DB_HANDLE;
-                                      item_list_buffer_length: UShort;
+                                      item_list_buffer_length: Word;
                                       item_list_buffer: PByte;
-                                      result_buffer_length: UShort;
+                                      result_buffer_length: Word;
                                       result_buffer: PByte): ISC_STATUS; stdcall;
   Tisc_interprete         = function (buffer: PByte; status_vector_ptr: PPSTATUS_VECTOR): ISC_STATUS; stdcall;
   Tisc_vax_integer        = function (buffer: PByte; length: Short): ISC_LONG; stdcall;
