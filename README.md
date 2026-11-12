@@ -17,7 +17,7 @@ fbconverter は、Firebird のデータベースを別バージョンへ移行�
 
 変換元には Firebird 1.0、1.5、2.0、2.1、2.5、3.0、4.0、5.0 系のサーバーを指定できます。1.0 系の動作検証には Firebird 1.0.3 を使用しました。
 
-両 ZIP の Firebird 2.1.7 Embedded には、`EUCJ_0208` 用の CORE-2095 修正版を同梱しています。Firebird 2.1 サーバーを変換元として EUC で接続する場合は、サーバー側の `fbintl.dll` も対応している必要があります。
+公式の Firebird 2.1.7 サーバー版には、`EUCJ_0208` の不具合を直す [CORE-2095](https://github.com/FirebirdSQL/firebird/issues/2529) の修正が入っていません。Firebird 2.1 への移行でこの不具合に遭遇した場合は、WIN32・WIN64 両 ZIP に同梱の **修正版 Firebird 2.1.7 Embedded** を変換先に選んでください。変換元の Firebird 2.1 サーバーでこの不具合が発生する場合は、変換元サーバー側にも修正が必要です。
 
 ## CLI
 

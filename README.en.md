@@ -17,7 +17,7 @@ Download the WIN32 or WIN64 ZIP from the [latest GitHub release](https://github.
 
 You can select Firebird server versions 1.0, 1.5, 2.0, 2.1, 2.5, 3.0, 4.0, or 5.0 as the source. Firebird 1.0 was tested with 1.0.3.
 
-Both packages include the CORE-2095 fix for `EUCJ_0208` in Firebird 2.1.7 Embedded. When connecting to a Firebird 2.1 source server with `EUCJ_0208`, the server also needs the patched `fbintl.dll`.
+The official Firebird 2.1.7 server does not include the [CORE-2095](https://github.com/FirebirdSQL/firebird/issues/2529) fix for `EUCJ_0208`. If you encounter this bug when migrating to Firebird 2.1, select the **patched Firebird 2.1.7 Embedded** bundled in both the WIN32 and WIN64 ZIPs as the destination. If the bug occurs on a Firebird 2.1 source server, the source server itself needs the fix.
 
 ## CLI
 
